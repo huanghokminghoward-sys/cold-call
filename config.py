@@ -39,3 +39,11 @@ SAMPLE_TRANSCRIPT = """銷售員：你好，請問係唔係陳先生呀？
 銷售員：係，我明白你有疑慮。其實係有一定條件嘅，唔係完全保本，而係有下限保障。你方唔方便我下個禮拜約個時間詳細解釋畀你聽？
 客戶：我先考慮下啦。
 銷售員：好，陳先生，咁我留低我嘅聯絡方式畀你，你有任何問題隨時搵我。多謝你今日嘅時間，祝你事事順心！"""
+CANTONESE_SPECIFIC_MODELS = set()
+HF_API_BASE = "https://api-inference.huggingface.co/models"
+HF_MAX_FILE_SIZE_MB = 25
+HF_MAX_RETRIES = 5
+HF_REQUEST_TIMEOUT = 180
+GEMINI_MAX_RETRIES = 3
+GEMINI_RETRY_DELAY = 2
+ANALYSIS_CACHE_SIZE = 50
