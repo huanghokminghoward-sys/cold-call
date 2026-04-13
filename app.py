@@ -383,12 +383,12 @@ with tab_analyze:
                     value=st.session_state.transcript,
                     height=250,
                 )
-elif input_mode == "🎤 當場錄音":
+        elif input_mode == "🎤 當場錄音":
             st.caption("點擊麥克風開始錄音，錄完再點一次停止")
             audio_data = st.audio_input("錄製通話")
             if audio_data:
                 st.audio(audio_data)
-                if st.button("🎤 開始轉錄錄音", type="primary", use_container_width=True):
+                if st.button("🎤 開始轉錄", type="primary", use_container_width=True):
                     if not st.session_state.hf_token:
                         st.error("請先在側邊欄輸入 HuggingFace Token")
                     else:
@@ -411,9 +411,10 @@ elif input_mode == "🎤 當場錄音":
                             st.error(f"轉錄失敗：{result['error']}")
             if st.session_state.transcript:
                 transcript_text = st.text_area(
-                    "轉錄結果（可手動修改）",
+                    "轉錄結果（可修改）",
                     value=st.session_state.transcript,
                     height=250,
+                )
                 )
         else:
             transcript_text = st.text_area(
