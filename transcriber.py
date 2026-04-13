@@ -54,7 +54,10 @@ class WhisperTranscriber:
     def _transcribe_hf_api(self, file_path: str) -> dict:
         try:
             url = self.HF_API_URL.format(model_id=self.model_id)
-            headers = {"Authorization": f"Bearer {self.hf_token}"}
+            headers = {
+                "Authorization": f"Bearer {self.hf_token}",
+                "Content-Type": "application/octet-stream",
+            }
 
             file_size = os.path.getsize(file_path)
             warning = None
