@@ -329,7 +329,7 @@ with tab_analyze:
 
         input_mode = st.radio(
             "選擇輸入方式",
-            ["🎙️ 上傳錄音", "📝 直接輸入文字"],
+           ["🎙️ 上傳錄音", "🎤 當場錄音", "📝 直接輸入文字"],
             horizontal=True,
         )
 
@@ -383,7 +383,38 @@ with tab_analyze:
                     value=st.session_state.transcript,
                     height=250,
                 )
-
+elif input_mode == "🎤 當場錄音":
+            st.caption("點擊麥克風開始錄音，錄完再點一次停止")
+            audio_data = st.audio_input("錄製通話")
+            if audio_data:
+                st.audio(audio_data)
+                if st.button("🎤 開始轉錄錄音", type="primary", use_container_width=True):
+                    if not st.session_state.hf_token:
+                        st.error("請先在側邊欄輸入 HuggingFace Token")
+                    else:
+                        with st.spinner("轉錄中，請稍候..."):
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                                tmp.write(audio_data.getvalue())
+                                tmp_path = tmp.name
+                            t = get_transcriber()
+                            t.update_token(st.session_state.hf_token)
+                            t.update_model(st.session_state.whisper_model)
+                            result = t.transcribe(tmp_path)
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception:
+                                pass
+                        if result["success"]:
+                            st.session_state.transcript = result["text"]
+                            st.success("轉錄完成")
+                        else:
+                            st.error(f"轉錄失敗：{result['error']}")
+            if st.session_state.transcript:
+                transcript_text = st.text_area(
+                    "轉錄結果（可手動修改）",
+                    value=st.session_state.transcript,
+                    height=250,
+                )
         else:
             transcript_text = st.text_area(
                 "輸入對話文字",
