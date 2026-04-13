@@ -415,7 +415,6 @@ with tab_analyze:
                     value=st.session_state.transcript,
                     height=250,
                 )
-                )
         else:
             transcript_text = st.text_area(
                 "輸入對話文字",
