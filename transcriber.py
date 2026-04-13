@@ -62,7 +62,8 @@ class WhisperTranscriber:
                 warning = "檔案超過 25 MB，HuggingFace API 可能拒絕請求，建議改用本地模式"
 
             with open(file_path, "rb") as f:
-                response = requests.post(url, headers=headers, data=f, timeout=180)
+                audio_bytes = f.read()
+            response = requests.post(url, headers=headers, data=audio_bytes, timeout=180)
 
             if response.status_code == 200:
                 data = response.json()
