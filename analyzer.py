@@ -1,178 +1,173 @@
-'# ============================================================
-# 粵語 Cold Call 分析系統 - AI 分析模組
-# ============================================================
-
-import hashlib
+import os
 import json
 import re
+import time
+import hashlib
+import logging
 
 import google.generativeai as genai
 
+from config import (
+    GEMINI_MAX_RETRIES,
+    GEMINI_RETRY_DELAY,
+    ANALYSIS_CACHE_SIZE,
+)
 
-# ============================================================
-# 分析 Prompt 模板
-# ============================================================
+logger = logging.getLogger(__name__)
 
-_PROMPT_TEMPLATE = """你係一個專業嘅銷售培訓師，專門分析粵語 Cold Call 錄音。
-請仔細分析以下對話，並以 JSON 格式返回詳細分析報告。
-
-對話內容：
-{transcript}
-
-請返回以下 JSON 格式（必須係有效嘅 JSON，不要加任何其他文字、markdown 代碼塊或解釋）：
-{{
-  "overall_score": <0–10 浮點數>,
-  "success_probability": <0–100 整數>,
-  "call_stage": "<cold_call | follow_up | closing | other>",
-  "opening": {{
-    "score": <0–10 浮點數>,
-    "analysis": "<開場白分析>",
-    "suggestions": ["<建議1>", "<建議2>"]
-  }},
-  "needs_discovery": {{
-    "score": <0–10 浮點數>,
-    "analysis": "<需求發掘分析>",
-    "suggestions": ["<建議>"]
-  }},
-  "product_presentation": {{
-    "score": <0–10 浮點數>,
-    "analysis": "<產品介紹分析>",
-    "suggestions": ["<建議>"]
-  }},
-  "objection_handling": {{
-    "score": <0–10 浮點數>,
-    "analysis": "<異議處理分析>",
-    "objections_raised": ["<客戶反對意見>"],
-    "handling_quality": "<處理質量評語>",
-    "suggestions": ["<建議>"]
-  }},
-  "closing": {{
-    "score": <0–10 浮點數>,
-    "analysis": "<成交技巧分析>",
-    "next_steps": ["<後續步驟>"],
-    "suggestions": ["<建議>"]
-  }},
-  "language_quality": {{
-    "score": <0–10 浮點數>,
-    "cantonese_naturalness": "<粵語自然度分析>",
-    "tone_assessment": "<語調評估>",
-    "suggestions": ["<建議>"]
-  }},
-  "customer_sentiment": {{
-    "overall": "<positive | neutral | negative>",
-    "trajectory": "<improving | stable | declining>",
-    "key_signals": ["<情緒信號>"]
-  }},
-  "competitor_mentions": {{
-    "detected": <true | false>,
-    "competitors": ["<競爭對手名稱>"],
-    "context": "<提及競爭對手嘅背景>"
-  }},
-  "top_strengths": ["<主要優點1>", "<主要優點2>", "<主要優點3>"],
-  "top_improvements": ["<改善建議1>", "<改善建議2>", "<改善建議3>"],
-  "recommended_followup": "<跟進建議>",
-  "summary": "<整體總結>"
-}}"""
-
-
-# ============================================================
-# ColdCallAnalyzer
-# ============================================================
+_SCHEMA = """{
+  "overall_score": <1-10整數>,
+  "success_probability": <0-100整數>,
+  "opening": {"score": <1-10>, "analysis": "<廣東話>", "suggestions": ["<建議>"]},
+  "needs_discovery": {"score": <1-10>, "analysis": "<廣東話>", "suggestions": ["<建議>"]},
+  "product_presentation": {"score": <1-10>, "analysis": "<廣東話>", "suggestions": ["<建議>"]},
+  "objection_handling": {"score": <1-10>, "objections_raised": ["<反對意見>"], "handling_quality": "<廣東話>", "better_responses": ["<改善回應>"]},
+  "closing": {"score": <1-10>, "analysis": "<廣東話>", "next_steps": ["<下一步>"]},
+  "language_quality": {"score": <1-10>, "cantonese_naturalness": "<廣東話>", "tone_assessment": "<廣東話>"},
+  "customer_sentiment": {"overall": "<positive/neutral/negative>", "trajectory": "<走向>", "key_signals": ["<信號>"]},
+  "competitor_mentions": {"detected": <true/false>, "competitors": ["<競爭對手>"], "context": "<廣東話>"},
+  "call_stage": "<完整通話/片段-開場/片段-中段/片段-收尾>",
+  "top_strengths": ["<優點1>", "<優點2>", "<優點3>"],
+  "top_improvements": ["<改善1>", "<改善2>", "<改善3>"],
+  "recommended_followup": "<廣東話>",
+  "summary": "<100字以內，廣東話>"
+}"""
 
 
 class ColdCallAnalyzer:
-    """使用 Gemini 模型分析 Cold Call 對話文字"""
-
-    def __init__(
-        self,
-        gemini_api_key: str = "",
-        model_name: str = "gemini-1.5-flash",
-    ):
-        self.gemini_api_key = gemini_api_key
+    def __init__(self, gemini_api_key="", model_name="gemini-1.5-flash"):
+        self.api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
         self.model_name = model_name
-        self._cache: dict = {}
         self._model = None
+        self._init_error = None
+        self._cache = {}
+        if self.api_key:
+            self._init_model()
 
-    # ------------------------------------------------------------------
-    # 設定更新（Streamlit 側邊欄會動態呼叫）
-    # ------------------------------------------------------------------
+    def analyze(self, transcript):
+        if not self.api_key:
+            return {"error": "請在側邊欄輸入 Gemini API Key"}
+        if not transcript.strip():
+            return {"error": "對話文字不能為空"}
+        if self._init_error:
+            return {"error": f"模型初始化失敗：{self._init_error}"}
+        if self._model is None:
+            self._init_model()
+            if self._model is None:
+                return {"error": self._init_error or "模型初始化失敗"}
+        cache_key = hashlib.md5(f"{self.model_name}:{transcript}".encode()).hexdigest()
+        if cache_key in self._cache:
+            cached = self._cache[cache_key].copy()
+            cached["_from_cache"] = True
+            return cached
+        result = self._analyze_with_retry(transcript)
+        if "error" not in result:
+            if len(self._cache) >= ANALYSIS_CACHE_SIZE:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[cache_key] = result
+        return result
 
-    def update_api_key(self, api_key: str):
-        if api_key != self.gemini_api_key:
-            self.gemini_api_key = api_key
-            self._model = None  # 強制重新初始化
-
-    def update_model(self, model_name: str):
-        if model_name != self.model_name:
-            self.model_name = model_name
-            self._model = None
+    def analyze_batch(self, transcripts):
+        return [self.analyze(t) for t in transcripts]
 
     def clear_cache(self):
         self._cache.clear()
 
-    # ------------------------------------------------------------------
-    # 內部工具
-    # ------------------------------------------------------------------
+    def update_api_key(self, new_key):
+        self.api_key = new_key
+        self._init_error = None
+        self._model = None
+        if new_key:
+            self._init_model()
 
-    def _get_model(self):
-        if self._model is None:
-            genai.configure(api_key=self.gemini_api_key)
-            self._model = genai.GenerativeModel(self.model_name)
-        return self._model
+    def update_model(self, model_name):
+        self.model_name = model_name
+        self._model = None
+        self._init_error = None
+        if self.api_key:
+            self._init_model()
 
-    @staticmethod
-    def _cache_key(transcript: str) -> str:
-        return hashlib.md5(transcript.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _extract_json(raw: str) -> str:
-        """從 AI 回應中提取 JSON 物件字串"""
-        # 去掉可能的 markdown 代碼塊
-        raw = re.sub(r"```(?:json)?", "", raw).strip()
-        match = re.search(r"\{[\s\S]*\}", raw)
-        if match:
-            return match.group()
-        raise ValueError("回應中找不到有效的 JSON 物件")
-
-    # ------------------------------------------------------------------
-    # 主要分析方法
-    # ------------------------------------------------------------------
-
-    def analyze(self, transcript: str) -> dict:
-        """
-        分析 Cold Call 對話。
-
-        Returns:
-            dict — 成功時包含分析欄位；失敗時包含 "error" 鍵。
-            若結果來自 cache，額外附帶 "_from_cache": True。
-        """
-        key = self._cache_key(transcript)
-        if key in self._cache:
-            result = dict(self._cache[key])
-            result["_from_cache"] = True
-            return result
-
-        raw = ""
+    def _init_model(self):
         try:
-            model = self._get_model()
-            prompt = _PROMPT_TEMPLATE.format(transcript=transcript)
-            response = model.generate_content(prompt)
-            raw = response.text.strip()
+            genai.configure(api_key=self.api_key)
+            self._model = genai.GenerativeModel(self.model_name)
+            self._init_error = None
+        except Exception as e:
+            self._model = None
+            self._init_error = str(e)
+            logger.error(f"Gemini 初始化失敗：{e}")
 
-            json_str = self._extract_json(raw)
-            result = json.loads(json_str)
-            self._cache[key] = result
+    def _analyze_with_retry(self, transcript):
+        prompt = self._build_prompt(transcript)
+        for attempt in range(GEMINI_MAX_RETRIES):
+            result = self._generate_with_json_mode(prompt)
+            if result is not None:
+                return result
+            result = self._generate_plain(prompt)
+            if "error" in result:
+                if any(kw in result["error"] for kw in ["503", "500", "超時", "連接"]) and attempt < GEMINI_MAX_RETRIES - 1:
+                    time.sleep(GEMINI_RETRY_DELAY * (2 ** attempt))
+                    continue
             return result
+        return {"error": "多次重試後仍然失敗"}
 
-        except json.JSONDecodeError as exc:
-            return {
-                "error": f"JSON 解析錯誤：{exc}",
-                "raw_response": raw,
-            }
-        except ValueError as exc:
-            return {
-                "error": str(exc),
-                "raw_response": raw,
-            }
-        except Exception as exc:
-            return {"error": f"分析失敗：{exc}"}
+    def _generate_with_json_mode(self, prompt):
+        try:
+            config = genai.GenerationConfig(temperature=0.2, response_mime_type="application/json")
+            response = self._model.generate_content(prompt, generation_config=config)
+            return self._parse_response(response.text)
+        except Exception:
+            return None
+
+    def _generate_plain(self, prompt):
+        try:
+            config = genai.GenerationConfig(temperature=0.2)
+            response = self._model.generate_content(prompt, generation_config=config)
+            return self._parse_response(response.text)
+        except Exception as e:
+            error_msg = str(e)
+            if "API_KEY_INVALID" in error_msg or "400" in error_msg:
+                return {"error": "Gemini API Key 無效"}
+            if "QUOTA_EXCEEDED" in error_msg or "429" in error_msg:
+                return {"error": "已超出 Gemini 免費配額，請稍後再試"}
+            return {"error": f"分析失敗：{error_msg[:200]}"}
+
+    def _build_prompt(self, transcript):
+        return f"""你係一個擁有10年經驗嘅專業銷售培訓師，專門分析粵語電話銷售（Cold Call）。
+請仔細分析以下對話，用地道廣東話撰寫深入嘅評估報告。
+如果對話係片段而非完整通話，請在 call_stage 欄位標明。
+
+=== Cold Call 對話文字 ===
+{transcript}
+===========================
+
+請嚴格按照以下 JSON 格式輸出（唔好加任何額外文字）：
+{_SCHEMA}
+
+重要要求：
+1. 所有分析文字必須用地道廣東話
+2. 每條建議必須具體、可立即執行
+3. 評分要客觀
+4. better_responses 必須提供可直接使用嘅粵語對白範例
+5. 輸出必須係有效 JSON"""
+
+    def _parse_response(self, text):
+        if not text:
+            return {"error": "Gemini 返回空回應"}
+        try:
+            return json.loads(text.strip())
+        except Exception:
+            pass
+        md = re.search(r"```(?:json)?\s*\n?([\s\S]*?)\n?```", text)
+        if md:
+            try:
+                return json.loads(md.group(1).strip())
+            except Exception:
+                pass
+        s, e = text.find("{"), text.rfind("}") + 1
+        if s >= 0 and e > s:
+            try:
+                return json.loads(text[s:e])
+            except Exception:
+                pass
+        return {"error": "無法解析結果，請重試", "overall_score": 0, "success_probability": 0, "summary": "格式錯誤", "top_strengths": [], "top_improvements": []}
