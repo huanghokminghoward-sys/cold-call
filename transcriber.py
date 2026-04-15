@@ -35,18 +35,14 @@ class WhisperTranscriber:
                 "Authorization": f"Bearer {self.hf_token}",
                 "Content-Type": "application/octet-stream",
             }
-
             file_size = os.path.getsize(file_path)
             warning = None
             if file_size > 25 * 1024 * 1024:
                 warning = "檔案超過 25 MB，建議改用本地模式"
-
             with open(file_path, "rb") as f:
                 audio_bytes = f.read()
-
             for attempt in range(5):
                 response = requests.post(url, headers=headers, data=audio_bytes, timeout=180)
-
                 if response.status_code == 200:
                     data = response.json()
                     if isinstance(data, dict):
@@ -58,7 +54,6 @@ class WhisperTranscriber:
                     else:
                         text = str(data)
                     return {"success": True, "text": text.strip(), "model": self.model_id, "warning": warning}
-
                 if response.status_code == 503:
                     try:
                         wait = min(float(response.json().get("estimated_time", 20)), 40)
@@ -68,18 +63,14 @@ class WhisperTranscriber:
                         time.sleep(wait)
                         continue
                     return {"success": False, "error": "模型載入中，請稍後重試（約1-2分鐘）"}
-
                 if response.status_code == 429:
                     if attempt < 4:
                         time.sleep(2 ** (attempt + 1))
                         continue
                     return {"success": False, "error": "請求過於頻繁，請稍後重試"}
-
                 if response.status_code == 401:
                     return {"success": False, "error": "HuggingFace Token 無效"}
-
                 return {"success": False, "error": f"API 錯誤 {response.status_code}：{response.text[:200]}"}
-
         except requests.exceptions.Timeout:
             return {"success": False, "error": "請求逾時，請嘗試較短片段（建議5分鐘以內）"}
         except Exception as exc:
