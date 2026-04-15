@@ -270,18 +270,24 @@ with tab1:
                 edited = st.text_area("轉錄結果（可修改）", value=st.session_state.transcript, height=200, key="rec_txt")
                 st.session_state.transcript = edited
 
-        else:
+       else:
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("🎲 載入隨機示例", use_container_width=True):
+                    from config import get_random_sample
+                    st.session_state.transcript = get_random_sample()
+                    st.rerun()
+            with col_btn2:
+                if st.button("🗑️ 清空", use_container_width=True):
+                    st.session_state.transcript = ""
+                    st.rerun()
             edited = st.text_area(
                 "輸入對話文字",
                 value=st.session_state.transcript,
                 height=300,
                 placeholder="銷售員：你好，請問係唔係...\n客戶：係呀...",
-                key="man_txt",
             )
             st.session_state.transcript = edited
-            if st.button("載入示例對話", use_container_width=True):
-                st.session_state.transcript = SAMPLE_TRANSCRIPT
-                st.rerun()
 
         call_name = st.text_input("通話備註（選填）", placeholder="例如：陳先生 2024-01-15")
 
